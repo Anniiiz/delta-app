@@ -1,0 +1,197 @@
+@import "tailwindcss";
+
+/*
+ * Linear-style theme.
+ * Near-black layers separated by hairline borders, one indigo accent for the primary action,
+ * focus and the current item, and small status colors (green cheaper, red pricier, orange on sale).
+ * Inter with Linear's character variants, dense 13–14px UI text, medium (510) as the default weight.
+ */
+@theme {
+  --font-sans: var(--font-inter), "SF Pro Display", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-inter), "SF Pro Display", -apple-system, system-ui, sans-serif;
+
+  --color-paper: #08090a;                 /* app background, behind sidebar and panel */
+  --color-card: #0f1011;                  /* main panel, cards */
+  --color-raised: #191a1b;                /* elevated: menus, hover, inputs */
+  --color-raised-2: #28282c;              /* selected segment, hover on raised */
+  --color-ink: #f7f8f8;                   /* primary text */
+  --color-ink-2: #d0d6e0;                 /* secondary text */
+  --color-mute: #8a8f98;                  /* tertiary text */
+  --color-faint: #62666d;                 /* quaternary: hints, shortcut keys */
+  --color-line: rgb(255 255 255 / 0.08);  /* hairline borders */
+  --color-line-2: rgb(255 255 255 / 0.05);
+
+  --color-accent: #5e6ad2;                /* primary button, current item marker */
+  --color-accent-2: #828fff;              /* accent hover */
+  --color-tag: #7170ff;                   /* links, active text, focus (legacy name) */
+  --color-tag-2: #828fff;
+  --color-on-tag: #ffffff;
+  --color-tagbg: rgb(113 112 255 / 0.12); /* selected row tint */
+
+  --color-leaf: #4cb782;                  /* cheaper, saved, verified */
+  --color-leaf-2: #27a644;
+  --color-on-leaf: #ffffff;
+  --color-mint: rgb(76 183 130 / 0.12);
+  --color-mint-2: rgb(76 183 130 / 0.2);
+
+  --color-sun: #f2994a;                   /* on sale */
+  --color-sunbg: rgb(242 153 74 / 0.12);
+  --color-berry: #eb5757;                 /* pricier, errors */
+  --color-berrybg: rgb(235 87 87 / 0.12);
+  --color-sky: #4ea7fc;                   /* information */
+  --color-skybg: rgb(78 167 252 / 0.12);
+  --color-violet: #b59aff;                /* sample / demo data */
+  --color-violetbg: rgb(181 154 255 / 0.12);
+  --color-on-violet: #16122b;
+}
+
+:root { color-scheme: dark; }
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: "cv01", "ss03";
+  font-weight: 400;
+}
+
+.night-hero { background: var(--color-card); }
+
+/* Panels and cards: barely lifted, with a hairline border. */
+@utility card {
+  @apply rounded-lg border border-line bg-card;
+}
+/* Properties and statuses: small, quiet. */
+@utility chip {
+  @apply inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] border border-line px-1.5 py-px text-xs font-medium;
+}
+@utility btn {
+  @apply inline-flex min-h-8 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tag/60 disabled:cursor-not-allowed disabled:opacity-50;
+}
+/* Primary action: the one indigo element on a screen. */
+@utility btn-leaf {
+  @apply btn bg-accent text-white hover:bg-accent-2;
+}
+@utility btn-primary {
+  @apply btn bg-ink text-paper hover:bg-white;
+}
+@utility btn-ghost {
+  @apply btn bg-transparent text-ink-2 hover:bg-raised hover:text-ink;
+}
+@utility btn-soft {
+  @apply btn border border-line bg-white/[0.02] text-ink-2 hover:bg-raised hover:text-ink;
+}
+@utility input {
+  @apply w-full rounded-md border border-line bg-white/[0.02] px-3 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-tag/60 focus:ring-2 focus:ring-tag/20;
+}
+@utility label {
+  @apply text-xs font-medium text-mute;
+}
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+/* Keyboard shortcut hint, as in Linear's menus. */
+@utility kbd {
+  @apply inline-grid min-w-[18px] place-items-center rounded-[4px] border border-line bg-white/[0.04] px-1 text-[11px] font-medium leading-[16px] text-mute;
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-inter);
+  font-weight: 590;
+  letter-spacing: -0.012em;
+  line-height: 1.25;
+}
+
+/* Prices: clean tabular numerals. */
+.price { font-variant-numeric: tabular-nums; font-weight: 590; letter-spacing: -0.01em; display: inline-flex; align-items: baseline; }
+.price-cur { margin-right: 0.04em; }
+.price-cents::before { content: "."; }
+
+@keyframes pop {
+  0% { opacity: 0; transform: translateY(2px) scale(0.99); }
+  100% { opacity: 1; transform: none; }
+}
+.animate-pop { animation: pop 0.14s ease-out both; }
+.animate-tag { animation: pop 0.18s ease-out both; }
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(76, 183, 130, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(76, 183, 130, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 183, 130, 0); }
+}
+.live-dot { animation: pulse-ring 2.4s infinite; }
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(113, 112, 255, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(113, 112, 255, 0.25); }
+}
+.glow { animation: glow 1.6s ease-in-out 2; }
+
+button, a, select, input[type="checkbox"], summary { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--color-tag); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+@keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+.animate-slide-in { animation: slide-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Data tables: dense, hairline rows, sticky header. */
+.dt { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.dt th { position: sticky; top: 0; z-index: 1; background: var(--color-card); text-align: left; font-weight: 510; font-size: 12px; color: var(--color-mute); padding: 8px 10px; border-bottom: 1px solid var(--color-line); white-space: nowrap; }
+.dt td { padding: 8px 10px; border-bottom: 1px solid var(--color-line-2); vertical-align: middle; }
+.dt tbody tr:hover td { background: rgb(255 255 255 / 0.02); }
+.dt .r { text-align: right; }
+
+/* Recharts in the dark theme */
+.recharts-cartesian-grid line { stroke: rgb(255 255 255 / 0.06); }
+.recharts-text { fill: var(--color-mute); font-size: 11px; }
+.recharts-tooltip-cursor { fill: rgb(255 255 255 / 0.03); }
+
+/* Print / save as PDF: light page, no app chrome, cards kept whole. */
+@media print {
+  :root {
+    color-scheme: light;
+    --color-paper: #ffffff;
+    --color-card: #ffffff;
+    --color-raised: #f4f5f7;
+    --color-raised-2: #e9eaee;
+    --color-ink: #111216;
+    --color-ink-2: #2e3138;
+    --color-mute: #5a5f69;
+    --color-faint: #80858f;
+    --color-line: rgb(0 0 0 / 0.14);
+    --color-line-2: rgb(0 0 0 / 0.08);
+  }
+  html, body { font-size: 12px; }
+  .card { break-inside: avoid; }
+  .dt th { position: static; }
+  .dt tr { break-inside: avoid; }
+}
+
+/* Filter feedback: while a filtered page loads, its content dims and the filter bar shows a spinner. */
+.filter-spinner { display: none; }
+body[data-filtering] .filter-spinner { display: inline-block; }
+body[data-filtering] .filter-icon { display: none; }
+body[data-filtering] main > div > :not(.sticky):not(.filter-loader) { opacity: 0.45; transition: opacity 0.12s ease-out; pointer-events: none; }
+
+/* Loading states: animated Δ, indeterminate progress bar, shimmering skeleton cards. */
+@keyframes delta-spin { 0% { transform: rotate(0deg) scale(1); opacity: 1; } 50% { transform: rotate(180deg) scale(0.86); opacity: 0.6; } 100% { transform: rotate(360deg) scale(1); opacity: 1; } }
+.delta-loader { display: inline-grid; place-items: center; color: var(--color-tag); animation: delta-spin 1.4s cubic-bezier(0.6, 0, 0.4, 1) infinite; }
+@keyframes loader-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+.loader-bar { position: relative; }
+.loader-bar::after { content: ""; position: absolute; inset: 0; width: 40%; border-radius: 9999px; background: var(--color-tag); animation: loader-slide 1.1s ease-in-out infinite; }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.skeleton { background-image: linear-gradient(90deg, rgb(255 255 255 / 0) 0, rgb(255 255 255 / 0.04) 50%, rgb(255 255 255 / 0) 100%); background-size: 800px 100%; background-repeat: no-repeat; animation: shimmer 1.4s linear infinite; }
+
+/* "Updating view…" card while a filtered page loads. */
+.filter-loader { display: none; }
+body[data-filtering] .filter-loader { display: flex; }
+
+/* Favourite star toggle (FavButton). Plain classes so long product tables stay light. */
+.fav { position: relative; display: inline-flex; flex-shrink: 0; }
+.fav > button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; color: var(--color-faint); transition: color 0.1s, background-color 0.1s; }
+.fav > button:hover { background: var(--color-raised); color: var(--color-ink-2); }
+.fav > button[aria-pressed="true"] { color: var(--color-tag); }
+.fav > button[data-implied] { color: rgb(113 112 255 / 0.85); }

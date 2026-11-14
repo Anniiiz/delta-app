@@ -1,0 +1,565 @@
+import Link from "next/link";
+import type { ReactNode } from "react";
+import { ArrowRight } from "lucide-react";
+import { accountCells, accountProducts, accountPromos, accountSummary, type AccountProduct, type AccountPromo } from "@/lib/account";
+import { DEFAULT_COMPANY, pageContext } from "@/lib/context";
+import { demoFacts } from "@/lib/demo";
+import { validUntil } from "@/lib/normalize";
+import { computeCase, fmt, fmtEur, nf1, type CaseInputs } from "@/lib/businesscase";
+import { BusinessCase } from "@/components/BusinessCase";
+import { Card, PageHeader, StoreBadge, ago, cls, stamp } from "@/components/ui";
+
+export const dynamic = "force-dynamic";
+
+const SOON_MS = 3 * 86400_000;
+const PILOT_WEEKS = 4;
+
+const plural = (n: number, one: string, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
+const share = (n: number, of: number) => (of > 0 ? `${nf1.format((n / of) * 100)}%` : "—");
+const eur2 = (n: number) => `€${n.toFixed(2)}`;
+
+/** Leading words + pack size identify a product line ("Karl Fazer … 180g"); same brand and comparison group. */
+const sizeOf = (name: string) => name.match(/(\d+(?:[.,]\d+)?\s?(?:g|kg|ml|l|dl|cl))\b/i)?.[1]?.replace(/\s/g, "").toLowerCase() ?? null;
+function siblingGroups(products: AccountProduct[]): AccountProduct[][] {
+  const groups = new Map<string, AccountProduct[]>();
+  for (const p of products) {
+    const size = sizeOf(p.name);
+    if (!size) continue;
+    const k = [p.brand ?? "", p.segment ?? "", p.name.split(/\s+/).slice(0, 2).join(" ").toLowerCase(), size].join("|");
+    groups.set(k, [...(groups.get(k) ?? []), p]);
+  }
+  // Distinct names only: two EANs with one name are a re-listing, not a sibling.
+  return [...groups.values()].map((g) => g.filter((p, i) => g.findIndex((q) => q.name === p.name) === i)).filter((g) => g.length > 1);
+}
+
+/** Sibling pair with the largest store-count gap where the narrower one is still seen in at least 5 stores. */
+function siblingGap(groups: AccountProduct[][]) {
+  const pairs = groups
+    .map((g) => {
+      const s = [...g].sort((a, b) => b.storesSeen - a.storesSeen);
+      return { wide: s[0], narrow: s[s.length - 1] };
+    })
+    .filter((x) => x.wide.storesSeen > x.narrow.storesSeen);
+  const pick = (min: number) => pairs.filter((x) => x.narrow.storesSeen >= min).sort((a, b) => b.wide.storesSeen - b.narrow.storesSeen - (a.wide.storesSeen - a.narrow.storesSeen))[0];
+  return pick(5) ?? pick(1) ?? null;
+}
+
+export default async function Demo({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const { company } = await pageContext(searchParams);
+  const now = Date.now();
+  const soonBy = now + SOON_MS;
+  const summary = accountSummary(company, now);
+  const products = accountProducts(company, now);
+  const cells = accountCells(company, undefined, now);
+  const { own, competitors } = accountPromos(company, now);
+  const f = demoFacts();
+
+  const href = (path: string, extra?: Record<string, string>, hash?: string) => {
+    const q = new URLSearchParams();
+    if (company !== DEFAULT_COMPANY) q.set("company", company);
+    for (const [k, v] of Object.entries(extra ?? {})) q.set(k, v);
+    const s = q.toString();
+    return `${path}${s ? `?${s}` : ""}${hash ? `#${hash}` : ""}`;
+  };
+
+  // ---------------------------------------------------------------- step evidence
+  const widestDist = products[0] ?? null;
+  const groups = siblingGroups(products);
+  const gap = siblingGap(groups);
+  const gapLeads = groups.flatMap((g) => {
+    const max = Math.max(...g.map((p) => p.storesSeen));
+    return g.filter((p) => p.storesSeen < max / 2);
+  }).length;
+
+  const ws = summary.widestSpread;
+  const wsProduct = ws ? products.find((p) => p.key === ws.key) ?? null : null;
+  const wsBanners = wsProduct ? wsProduct.banners.filter((b) => !b.chainOnly).slice(0, 4) : [];
+  const spread20 = products.filter((p) => p.spreadPct != null && p.spreadPct > 20).length;
+
+  const live = own.filter((p) => p.active);
+  const ends = (p: AccountPromo) => validUntil(p.validTo);
+  const isSoon = (p: AccountPromo) => {
+    const t = ends(p);
+    return t != null && t <= soonBy;
+  };
+  const deepest = live
+    .filter((p) => p.discountPct != null && p.referencePrice != null && p.offerPrice > 0)
+    .sort((a, b) => b.discountPct! - a.discountPct! || b.stores - a.stores)[0];
+
+  const compCompanies = new Set(competitors.map((c) => c.company ?? "Other"));
+  const compGroups = new Set(competitors.map((c) => c.segment).filter(Boolean));
+  const biggestComp = [...competitors].sort((a, b) => Number(b.level === "store") - Number(a.level === "store") || b.stores - a.stores || (b.discountPct ?? -1) - (a.discountPct ?? -1))[0];
+  const compSoon = competitors.filter(isSoon).length;
+  const avgStores = products.length ? cells.length / products.length : 0;
+
+  // ---------------------------------------------------------------- business case
+  const defaults: CaseInputs = { products: summary.products, stores: Math.max(1, Math.round(avgStores)), perWeek: 1, minutes: 1.5, hourly: 45, sharePct: 2 };
+  const bc = computeCase(defaults);
+  const sweepPages = summary.products * summary.storeScopesTotal;
+
+  // ---------------------------------------------------------------- live pipeline state
+  const monitorObs = f.origins.find((o) => o.origin === "monitor")?.n ?? 0;
+  const eventsTotal = f.events.reduce((n, e) => n + e.n, 0);
+  const eventsProcessed = f.events.filter((e) => e.status === "processed").reduce((n, e) => n + e.n, 0);
+  const monitorAlerts = f.alerts.find((a) => a.origin === "monitor")?.n ?? 0;
+  const replayAlerts = f.alerts.find((a) => a.origin === "replay")?.n ?? 0;
+  const importedMonitors = f.monitors.filter((m) => m.origin !== "shelfintel").reduce((n, m) => n + m.n, 0);
+  const lastRun = f.monitors.reduce<string | null>((m, x) => (x.lastRun && (!m || x.lastRun > m) ? x.lastRun : m), null);
+  const liveOn = f.hasKey && f.liveMonitors > 0;
+  const ownSoon = live.filter(isSoon).length;
+
+  const pitch = summary.products
+    ? `${company}: ${plural(summary.products, "product")} seen in ${fmt(summary.storesSeen)} of ${fmt(summary.storeScopesTotal)} store scopes across ${plural(summary.banners, "banner")}, ${plural(summary.livePromos, "live promotion")}.`
+    : `${company}: no captured listings in the current data, so the steps below show what each screen does rather than ${company} numbers.`;
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Demo & Business Case"
+        sub={
+          <>
+            <span className="text-ink-2">{pitch}</span> Captures from {stamp(f.firstCapture, false)} to {stamp(f.latestCapture, false)}, Helsinki and Espoo stores. Every number on this page is
+            computed from the captured data when the page loads; assumptions are marked.
+          </>
+        }
+        right={<span className="chip text-mute">about 3 minutes · 5 steps</span>}
+      />
+
+      {/* ------------------------------------------------------------ guided demo */}
+      <Card title="Guided demo" sub="Each step: the buyer's question, what the data shows today, what the buyer does with it, and the screen that proves it." pad={false}>
+        <ol className="divide-y divide-line">
+          <Step
+            n={1}
+            q="Where are my products sold?"
+            evidence={
+              widestDist ? (
+                <>
+                  <li>
+                    Widest footprint: <b className="font-medium text-ink">{widestDist.name}</b>, seen in {plural(widestDist.storesSeen, "store scope")} across {plural(widestDist.banners.length, "banner")}.
+                  </li>
+                  {gap && (
+                    <li>
+                      Same line, same pack: {gap.wide.name} is seen in {fmt(gap.wide.storesSeen)} stores, {gap.narrow.name} in {fmt(gap.narrow.storesSeen)}. The other stores are not captured
+                      for it, which may or may not be a listing gap.
+                    </li>
+                  )}
+                </>
+              ) : (
+                <li>No captured listings for {company} yet.</li>
+              )
+            }
+            does="Key account managers see per banner where each product was seen; field sales gets a list of stores to verify."
+            cta={{ href: href("/account", undefined, "presence"), label: "Store presence" }}
+          />
+          <Step
+            n={2}
+            q="What do they cost there?"
+            evidence={
+              ws && wsProduct ? (
+                <>
+                  <li>
+                    Widest spread: <b className="font-medium text-ink">{ws.name}</b> at {eur2(ws.min)} to {eur2(ws.max)} across {fmt(ws.stores)} stores, a {nf1.format(ws.pct)}% spread.
+                  </li>
+                  {wsBanners.length > 0 && (
+                    <li className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span>Most common price per banner:</span>
+                      {wsBanners.map((b) => (
+                        <span key={b.banner} className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <StoreBadge banner={b.banner} /> {b.banner} <span className="num text-ink">{eur2(b.modePrice)}</span>
+                          <span className="text-faint">({b.stores})</span>
+                        </span>
+                      ))}
+                    </li>
+                  )}
+                </>
+              ) : (
+                <li>No {company} product seen in 2 or more stores, so no spread yet.</li>
+              )
+            }
+            does="Revenue managers bring store-level price facts to retailer meetings. Retailers set shelf prices; the screen describes them."
+            cta={ws ? { href: href("/account", { p: ws.key }), label: "Product drill-down" } : { href: href("/account", undefined, "prices"), label: "Shelf prices" }}
+          />
+          <Step
+            n={3}
+            q="What discounts are running on them?"
+            evidence={
+              live.length ? (
+                <>
+                  <li>
+                    {plural(live.length, "live promotion")} on {plural(summary.promoStoreListings, "store listing")}; {fmt(ownSoon)} state an end date within 3 days.
+                  </li>
+                  {deepest && (
+                    <li>
+                      Deepest stated discount: {nf1.format(deepest.discountPct!)}% on {deepest.name} at {deepest.banner} ({deepest.label ?? deepest.type},{" "}
+                      {deepest.level === "chain" ? "chain-wide" : plural(deepest.stores, "store")}), against a stated {deepest.referenceKind === "lowest_30d" ? "30-day lowest" : "regular"} price of{" "}
+                      {eur2(deepest.referencePrice!)}.
+                    </li>
+                  )}
+                </>
+              ) : (
+                <li>No live promotions on {company} products in the captured pages.</li>
+              )
+            }
+            does="Trade marketing checks each agreed campaign: live, at the agreed price, in the agreed stores, until the agreed date."
+            cta={{ href: href("/account", undefined, "promotions"), label: "Promotions" }}
+          />
+          <Step
+            n={4}
+            q="What are competitors doing next to me?"
+            evidence={
+              competitors.length ? (
+                <>
+                  <li>
+                    {fmt(competitors.length)} live competitor offers (per product and banner) from {plural(compCompanies.size, "company", "companies")} in {plural(compGroups.size, "comparison group")}{" "}
+                    where {company} has products.
+                  </li>
+                  {biggestComp && (
+                    <li>
+                      Widest: {biggestComp.brand ?? biggestComp.company} {biggestComp.label ?? biggestComp.type} on {biggestComp.name} at {biggestComp.banner},{" "}
+                      {biggestComp.level === "chain" ? "chain-wide" : plural(biggestComp.stores, "store")}, {biggestComp.validTo ? `ends ${stamp(biggestComp.validTo, false)}` : "no end date stated"}.
+                    </li>
+                  )}
+                </>
+              ) : (
+                <li>No competitor promotions captured in {company}&apos;s comparison groups.</li>
+              )
+            }
+            does="Category managers plan the next promotion window with the competitor calendar in view, instead of reading flyers."
+            cta={{ href: href("/account", undefined, "competitors"), label: "Competitor promotions" }}
+          />
+        </ol>
+      </Card>
+
+      {/* ------------------------------------------------------------ step 5: the live reaction */}
+      <section className="card min-w-0 border-tag/40" aria-labelledby="step5">
+        <header className="flex flex-wrap items-start gap-3 border-b border-line px-4 py-3">
+          <StepNo n={5} accent />
+          <div className="min-w-0 flex-1">
+            <h2 id="step5" className="text-[15px] font-semibold text-ink">
+              What changes next? Watch it react.
+            </h2>
+            <p className="mt-0.5 text-xs text-mute">
+              Context.dev watches retailer pages. A detected change is re-scraped fresh and compared with the stored history before it can become an alert.
+            </p>
+          </div>
+          <Link href={href("/monitor")} className="btn-leaf print:hidden">
+            Competitor Monitor <ArrowRight size={14} aria-hidden />
+          </Link>
+        </header>
+
+        <ol className="grid gap-px bg-line sm:grid-cols-5">
+          <Stage name="Watch" what="Page monitors on product pages, with instructions to ignore layout and banners">
+            {plural(f.liveMonitors, "Delta monitor")}
+            {importedMonitors > 0 && <span className="text-mute"> · {fmt(importedMonitors)} imported history</span>}
+          </Stage>
+          <Stage name="Receive" what="Private polling of account changes, or signed webhooks (HMAC-SHA256, 5-minute tolerance), deduplicated by event id">
+            {plural(eventsTotal, "change event")}
+            {eventsTotal > 0 && <span className="text-mute"> · {fmt(eventsProcessed)} processed</span>}
+          </Stage>
+          <Stage name="Verify" what="Fresh scrape with maxAgeMs 0; prices re-extracted from the page state or with JSON extraction">
+            {plural(monitorObs, "observation")} written by monitors
+          </Stage>
+          <Stage name="Compare" what="Diff against the previous observation of the same product in the same store">
+            {plural(f.repeatPairs, "product × store pair")} with 2+ captures
+          </Stage>
+          <Stage name="Alert" what="Only when price, offer or listing changed; a page change alone is not an alert">
+            {plural(monitorAlerts, "monitor alert")}
+            {replayAlerts > 0 && <span className="text-violet"> · {fmt(replayAlerts)} replayed</span>}
+          </Stage>
+        </ol>
+
+        <div className="grid gap-4 p-4 md:grid-cols-2">
+          <div>
+            <div className="label">Next expected reactions</div>
+            <p className="mt-1 text-[13px] text-ink-2">
+              {fmt(ownSoon)} {company} {ownSoon === 1 ? "promotion" : "promotions"} and {fmt(compSoon)} competitor {compSoon === 1 ? "promotion" : "promotions"} state an end date within 3 days
+              (by {stamp(new Date(soonBy).toISOString(), false)}). On a monitored page, each is due to produce a &ldquo;Promotion ended&rdquo; alert, or show that the offer was extended, at the next
+              check after that date. None of these alerts has happened yet.
+            </p>
+          </div>
+          <div>
+            <div className="label">Live status</div>
+            {liveOn ? (
+              <p className="mt-1 text-[13px] text-ink-2">
+                <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-leaf align-middle" aria-hidden />
+                Live monitoring is on: {plural(f.liveMonitors, "monitor")}, last run {lastRun ? ago(lastRun, now) : "not yet"}.
+              </p>
+            ) : (
+              <p className="mt-1 text-[13px] text-ink-2">
+                <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-faint align-middle" aria-hidden />
+                <b className="font-medium text-ink">Live monitoring is not switched on</b> in this instance ({!f.hasKey ? "Context.dev key not set" : "no Delta monitors yet"}). What you see is
+                captured data from {plural(f.captureDays, "day")}. Switching it on: create the recommended monitors on Competitor Monitor (about 1 credit per scheduled check); changes then
+                arrive by polling or webhook and run through the steps above.
+                {f.replayPairs > 0 && ` For the demo, ${plural(f.replayPairs, "recorded capture pair")} can be replayed through the same pipeline, labelled as replay.`}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------ business case */}
+      <Card
+        id="business-case"
+        title="The cost of doing this by hand"
+        sub={`What it takes to check ${company}'s footprint store by store on retailer websites. Defaults come from the live data where possible; the rest are assumptions you can change.`}
+        pad={false}
+      >
+        <BusinessCase defaults={defaults} company={company} products={summary.products} storesSeen={summary.storesSeen} avgStores={avgStores} />
+      </Card>
+
+      <Card
+        title="Value beyond time saved"
+        sub="We have no sales volumes, margins or market share, so these levers carry no € value: the evidence is what the data shows today."
+        pad={false}
+      >
+        <div className="overflow-x-auto">
+          <table className="dt">
+            <thead>
+              <tr>
+                <th>Lever</th>
+                <th>Who uses it</th>
+                <th>Evidence for {company} today</th>
+                <th>Decision it supports</th>
+              </tr>
+            </thead>
+            <tbody>
+              <Lever
+                name="Campaign execution check"
+                who="Key account managers, trade marketing"
+                evidence={live.length ? `${plural(live.length, "live promotion")} on ${plural(summary.promoStoreListings, "store listing")}; ${fmt(ownSoon)} end within 3 days` : "—"}
+                decision="Confirm each agreed campaign is live at the agreed price, stores and dates; raise exceptions with the retailer"
+              />
+              <Lever
+                name="Price-spread visibility"
+                who="Revenue and pricing managers"
+                evidence={ws ? `${plural(spread20, "product")} with a store-level spread above 20%; widest ${nf1.format(ws.pct)}% (${ws.name})` : "—"}
+                decision="Bring store-level price facts to negotiations and pack-price reviews; retailers set their own shelf prices"
+              />
+              <Lever
+                name="Competitor promo response"
+                who="Category managers"
+                evidence={competitors.length ? `${fmt(competitors.length)} live competitor offers from ${plural(compCompanies.size, "company", "companies")}; ${fmt(compSoon)} end within 3 days` : "—"}
+                decision="Time the next promotion window with the competitor calendar in view"
+              />
+              <Lever
+                name="Listing-gap leads"
+                who="Field sales"
+                evidence={groups.length ? `${plural(gapLeads, "product")} seen in under half the stores of a sibling in the same line and pack size` : "—"}
+                decision="Verify in store before treating it as a gap; a store without a capture is not evidence of absence"
+              />
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <Card title="Subscription tiers" sub="Priced by tracked products, monitored retailers, monitoring frequency, reporting and users." pad={false}>
+          <table className="dt">
+            <tbody>
+              <tr>
+                <td className="align-top">
+                  <div className="font-medium text-ink">Starter</div>
+                </td>
+                <td className="text-ink-2">Limited product monitoring, competitor comparisons, daily updates.</td>
+              </tr>
+              <tr>
+                <td className="align-top">
+                  <div className="font-medium text-ink">Business</div>
+                </td>
+                <td className="text-ink-2">Adds retailer coverage, promotion alerts, price history, automated reports and category intelligence.</td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+
+        <Card title={`Pilot proposal for ${company}`} sub={`${PILOT_WEEKS} weeks, one company, its full product list, captured daily.`}>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+            <Fact label="Products">{fmt(summary.products)}</Fact>
+            <Fact label="Store scopes">{fmt(summary.storeScopesTotal)}</Fact>
+            <Fact label="Pages per daily sweep">{fmt(sweepPages)}</Fact>
+          </dl>
+          <p className="mt-3 text-xs text-mute">
+            Pages per sweep = products × store scopes ({fmt(summary.products)} × {fmt(summary.storeScopesTotal)}), {fmt(sweepPages * PILOT_WEEKS * 7)} page reads over {PILOT_WEEKS * 7} daily sweeps.
+            That is the upper bound if every product page is read in every store; category pages list many products at once and cut the count.
+          </p>
+          <div className="mt-3 label">Success criteria</div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[13px] text-ink-2">
+            <li>Every {company} campaign in the period has its start and end confirmed from the retailer pages.</li>
+            <li>A daily price history exists for every product × store pair captured.</li>
+            <li>Field sales verifies the listing-gap list in store and reports how many were real gaps.</li>
+            <li>Every alert links to its source page and capture time.</li>
+          </ul>
+        </Card>
+      </div>
+
+      {/* ------------------------------------------------------------ judging criteria */}
+      <Card title="How this answers the brief" sub="The Web Is Your Real-Time Database: one row per judging criterion, each 20%, with the live evidence behind it." pad={false}>
+        <div className="overflow-x-auto">
+          <table className="dt">
+            <thead>
+              <tr>
+                <th>Criterion</th>
+                <th>Live evidence</th>
+                <th className="print:hidden"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <Criterion
+                name="Real-world impact"
+                cta={{ href: "#business-case", label: "Business case" }}
+                points={[
+                  `Checking ${company}'s full footprint by hand: ${fmt(bc.fullHours)} hours, ${fmtEur(bc.fullCost)} a year at the default assumptions.`,
+                  `Today's ${fmt(defaults.sharePct)}% hand-checked share: ${fmtEur(bc.todayCost)} a year; Delta gives ${nf1.format(bc.coverageMultiple ?? 0)}× the coverage.`,
+                  `Buyer questions answered from ${plural(summary.products, "product")} and ${plural(live.length, "live promotion")}.`,
+                ]}
+              />
+              <Criterion
+                name="Creative use of live web data"
+                cta={{ href: href("/catalog"), label: "Products & Stores" }}
+                points={[
+                  `${fmt(f.observations)} observations from ${plural(f.hosts.length, "site")}: ${f.hosts.map((h) => `${h.host} ${fmt(h.n)}`).join(", ")}.`,
+                  `Distinct pages: ${fmt(f.pageTypes.product)} product pages, ${fmt(f.pageTypes.offer)} offer and campaign pages, ${fmt(f.pageTypes.category)} category listings${f.pageTypes.other ? `, ${fmt(f.pageTypes.other)} other` : ""}.`,
+                  `Capture runs: ${f.origins.map((o) => `${o.origin} ${fmt(o.n)}`).join(", ")}.`,
+                  `Context.dev in the code: web.scrape (HTML, JSON extraction with a schema, markdown, browser actions, fresh reads with maxAgeMs 0), batch scraping, monitors (create, run, retrieve, delete, list account changes), signed webhooks.`,
+                  `Joins: ${plural(f.eansAcrossRetailers, "EAN")} seen at 2 or more retailers; ${fmt(f.scopes.store)} store-level scopes plus ${plural(f.scopes.chain, "chain-wide offer feed")} across ${plural(f.retailers, "retailer")}.`,
+                ]}
+              />
+              <Criterion
+                name="Completeness of demo"
+                cta={{ href: href("/monitor"), label: "Competitor Monitor" }}
+                points={[
+                  f.missingProvenance === 0
+                    ? `Every one of ${fmt(f.observations)} observations has a source URL and capture time; ${share(f.withRequestId, f.observations)} carry a Context.dev request id.`
+                    : `${fmt(f.observations - f.missingProvenance)} of ${fmt(f.observations)} observations have a source URL and capture time; ${share(f.withRequestId, f.observations)} carry a Context.dev request id.`,
+                  `${fmt(f.flagged)} observations carry data-quality flags; unit prices come only from a single known pack size, and size ranges or conflicts are excluded.`,
+                  "Honesty rules in code: promotions only when advertised, discount % only with a stated reference price, a lower price is a price change, never a discount.",
+                  `Webhooks checked with HMAC-SHA256 and a 5-minute tolerance, events deduplicated by id; local credit budget ${fmt(f.creditsSpent)} of ${fmt(f.creditBudget)} used.`,
+                ]}
+              />
+              <Criterion
+                name="Technical execution"
+                cta={{ href: href("/prices"), label: "Price Intelligence" }}
+                points={[
+                  `Latest capture ${stamp(f.latestCapture)} (${ago(f.latestCapture, now)}).`,
+                  `${share(f.withRequestId, f.observations)} of observations trace to a Context.dev request; ${share(f.productsWithEan, f.products)} of ${fmt(f.products)} products have an EAN; ${share(f.obsWithUnitPrice, f.observations)} of observations have a comparable unit price.`,
+                  f.scrapeMs.length
+                    ? `Latency of a fresh page read through Context.dev (cache bypassed): median ${nf1.format(f.scrapeMs[Math.floor((f.scrapeMs.length - 1) / 2)] / 1000)} s, slowest ${nf1.format(f.scrapeMs[f.scrapeMs.length - 1] / 1000)} s, over ${plural(f.scrapeMs.length, "timed read")}.`
+                    : `Latency: not yet measured. No fresh page read has been timed (${plural(f.apiCalls, "logged API call")} in this instance${f.apiFailures ? `, ${fmt(f.apiFailures)} failed` : ""}).`,
+                ]}
+              />
+              <Criterion
+                name="Real-timeness"
+                cta={{ href: href("/monitor"), label: "Competitor Monitor" }}
+                points={[
+                  `${plural(f.captureTimes, "distinct capture time")} over ${plural(f.captureDays, "day")}; ${plural(f.repeatPairs, "product × store pair")} seen more than once; ${plural(f.priceChanges, "observed price change")} between captures.`,
+                  `Monitors: ${f.monitors.length ? f.monitors.map((m) => `${fmt(m.n)} ${m.origin}${m.status ? ` (${m.status})` : ""}`).join(", ") : "none"}${lastRun ? `, last run ${stamp(lastRun)}` : ""}. Alerts: ${fmt(monitorAlerts)} from monitors, ${fmt(replayAlerts)} replayed.`,
+                  `Next expected reactions: ${fmt(ownSoon + compSoon)} promotions (${fmt(ownSoon)} ${company}, ${fmt(compSoon)} competitor) state an end date within 3 days (by ${stamp(new Date(soonBy).toISOString(), false)}).`,
+                  liveOn
+                    ? `Live monitoring is on with ${plural(f.liveMonitors, "monitor")}.`
+                    : `Live monitoring not switched on${!f.hasKey ? " (Context.dev key not set)" : ""}: today this is a ${plural(f.captureDays, "day")} snapshot with history, not a live feed.`,
+                ]}
+              />
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card title="What this is not">
+        <ul className="grid gap-x-6 gap-y-1.5 text-[13px] text-ink-2 md:grid-cols-2">
+          <li>No sales volumes, margins, market share, physical shelf position or in-store stock.</li>
+          <li>
+            {plural(f.captureDays, "day")} of captures ({stamp(f.firstCapture, false)} to {stamp(f.latestCapture, false)}), so no trends yet.
+          </li>
+          <li>Helsinki and Espoo stores only.</li>
+          <li>A blank store means not captured, not absent from the shelf.</li>
+          <li className="md:col-span-2">
+            The platform describes the market. It does not recommend coordinating prices with competitors or dictating retailers&apos; resale prices.
+          </li>
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
+function StepNo({ n, accent = false }: { n: number; accent?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cls("num grid h-6 w-6 shrink-0 place-items-center rounded-md border text-xs font-semibold", accent ? "border-tag/50 bg-tagbg text-tag" : "border-line bg-white/[0.03] text-ink-2")}
+    >
+      {n}
+    </span>
+  );
+}
+
+function Step({ n, q, evidence, does, cta }: { n: number; q: string; evidence: ReactNode; does: string; cta: { href: string; label: string } }) {
+  return (
+    <li className="grid gap-x-4 gap-y-2 px-4 py-3.5 md:grid-cols-[24px_minmax(0,1.6fr)_minmax(0,1fr)_auto] md:items-start">
+      <StepNo n={n} />
+      <div className="min-w-0">
+        <h3 className="text-[14px] text-ink">{q}</h3>
+        <ul className="mt-1 space-y-1 text-[13px] leading-snug text-ink-2">{evidence}</ul>
+      </div>
+      <div className="min-w-0">
+        <div className="label">What the buyer does</div>
+        <p className="mt-0.5 text-[13px] leading-snug text-ink-2">{does}</p>
+      </div>
+      <Link href={cta.href} className="btn-soft whitespace-nowrap print:hidden">
+        {cta.label} <ArrowRight size={13} aria-hidden />
+      </Link>
+    </li>
+  );
+}
+
+function Stage({ name, what, children }: { name: string; what: string; children: ReactNode }) {
+  return (
+    <li className="bg-card px-4 py-3">
+      <div className="text-[13px] font-semibold text-ink">{name}</div>
+      <div className="num mt-1 text-[13px] text-ink-2">{children}</div>
+      <p className="mt-1 text-[11px] leading-snug text-faint">{what}</p>
+    </li>
+  );
+}
+
+function Lever({ name, who, evidence, decision }: { name: string; who: string; evidence: string; decision: string }) {
+  return (
+    <tr>
+      <td className="whitespace-nowrap font-medium text-ink">{name}</td>
+      <td className="text-ink-2">{who}</td>
+      <td className="num text-ink-2">{evidence}</td>
+      <td className="text-ink-2">{decision}</td>
+    </tr>
+  );
+}
+
+function Criterion({ name, points, cta }: { name: string; points: string[]; cta: { href: string; label: string } }) {
+  return (
+    <tr>
+      <td className="w-[200px] align-top">
+        <div className="font-medium text-ink">{name}</div>
+        <div className="text-xs text-faint">20%</div>
+      </td>
+      <td className="align-top">
+        <ul className="num list-disc space-y-0.5 pl-4 text-ink-2">
+          {points.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      </td>
+      <td className="r align-top print:hidden">
+        <Link href={cta.href} className="btn-ghost h-7 min-h-7 whitespace-nowrap px-2 text-xs">
+          {cta.label} <ArrowRight size={12} aria-hidden />
+        </Link>
+      </td>
+    </tr>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt className="label">{label}</dt>
+      <dd className="num mt-0.5 text-[17px] font-semibold text-ink">{children}</dd>
+    </div>
+  );
+}
